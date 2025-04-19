@@ -26,11 +26,13 @@ export interface IStorage {
   getCoachImages(coachId: number): Promise<CoachImage[]>;
   createCoachImage(image: InsertCoachImage): Promise<CoachImage>;
   deleteCoachImage(id: number): Promise<boolean>;
+  deleteCoachImages(coachId: number): Promise<void>; // Delete all images for a coach
   
   // Coach features operations
   getCoachFeatures(coachId: number): Promise<CoachFeature[]>;
   createCoachFeature(feature: InsertCoachFeature): Promise<CoachFeature>;
   deleteCoachFeature(id: number): Promise<boolean>;
+  deleteCoachFeatures(coachId: number): Promise<void>; // Delete all features for a coach
   
   // Coach types operations
   getCoachTypes(): Promise<CoachType[]>;
@@ -231,6 +233,12 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
   
+  async deleteCoachImages(coachId: number): Promise<void> {
+    await db
+      .delete(coachImages)
+      .where(eq(coachImages.coachId, coachId));
+  }
+  
   // Coach features operations
   async getCoachFeatures(coachId: number): Promise<CoachFeature[]> {
     return db
@@ -254,6 +262,12 @@ export class DatabaseStorage implements IStorage {
       .returning({ id: coachFeatures.id });
     
     return result.length > 0;
+  }
+  
+  async deleteCoachFeatures(coachId: number): Promise<void> {
+    await db
+      .delete(coachFeatures)
+      .where(eq(coachFeatures.coachId, coachId));
   }
   
   // Metadata operations
