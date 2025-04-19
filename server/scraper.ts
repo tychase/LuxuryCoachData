@@ -281,19 +281,24 @@ async function processCoachListing(url: string) {
     // Assign a coach type based on the data
     let typeId: number | undefined = undefined;
     
+    const lowerTitle = title.toLowerCase();
+    const make = titleParts.make?.toLowerCase() || '';
+    
     // Class A is the default for large luxury coaches
-    if (title.toLowerCase().includes('luxury') || 
-        title.toLowerCase().includes('class a') ||
-        titleParts.make?.toLowerCase() === 'prevost' ||
-        titleParts.make?.toLowerCase() === 'marathon' ||
-        titleParts.make?.toLowerCase() === 'featherlite' ||
-        titleParts.make?.toLowerCase() === 'millennium') {
+    if (lowerTitle.includes('luxury') || 
+        lowerTitle.includes('class a') ||
+        make === 'prevost' ||
+        make === 'marathon' ||
+        make === 'featherlite' ||
+        make === 'millennium' ||
+        make === 'liberty' ||
+        make === 'emerald') {
       typeId = 4; // Luxury type
-    } else if (title.toLowerCase().includes('class a')) {
+    } else if (lowerTitle.includes('class a')) {
       typeId = 1; // Class A
-    } else if (title.toLowerCase().includes('class b')) {
+    } else if (lowerTitle.includes('class b')) {
       typeId = 2; // Class B
-    } else if (title.toLowerCase().includes('class c')) {
+    } else if (lowerTitle.includes('class c')) {
       typeId = 3; // Class C
     }
     
