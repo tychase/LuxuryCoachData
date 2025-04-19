@@ -248,9 +248,14 @@ async function processCoachListing(hit: IndexHit) {
     // Use slide count from meta or extract from page
     let slideCount = meta.slides || 0;
     
+    // Extract seller and location information from page content
+    let seller = meta.seller || null;
+    let location = meta.state || null;
+    
     // If no slide count in meta, try to extract from page
+    const pageText = $('body').text().toLowerCase();
+    
     if (slideCount === 0) {
-      const pageText = $('body').text().toLowerCase();
       const slideMatch = pageText.match(/(single|double|triple|quad|(\d+))\s*(slide|slideout)/i);
       if (slideMatch) {
         if (slideMatch[1] === 'single') slideCount = 1;
@@ -261,8 +266,50 @@ async function processCoachListing(hit: IndexHit) {
       }
     }
     
-    // Look for common specs in the page text
-    const pageText = $('body').text().toLowerCase();
+    // Look for seller information if not in meta
+    if (!seller) {
+      // Check for common seller patterns
+      const sellerPatterns = [
+        /contact\s*:?\s*([A-Za-z\s]+?)\s*\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/i,
+        /(?:offered by|offered for sale by|presented by|marketed by|from|by|call)\s*:?\s*([A-Za-z\s]+?(?:Coach|RV|Sales|Motors))\s/i,
+        /for\s*(?:more)?\s*information\s*(?:contact|call)?\s*:?\s*([A-Za-z\s]+?(?:Coach|RV|Sales|Motors))/i
+      ];
+      
+      for (const pattern of sellerPatterns) {
+        const match = pageText.match(pattern);
+        if (match && match[1]) {
+          seller = match[1].trim();
+          break;
+        }
+      }
+    }
+    
+    // Look for location information if not in meta
+    if (!location) {
+      // Check for state names or abbreviations
+      const states = {
+        'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
+        'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia',
+        'HI': 'Hawaii', 'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa',
+        'KS': 'Kansas', 'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland',
+        'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi', 'MO': 'Missouri',
+        'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada', 'NH': 'New Hampshire', 'NJ': 'New Jersey',
+        'NM': 'New Mexico', 'NY': 'New York', 'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio',
+        'OK': 'Oklahoma', 'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina',
+        'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah', 'VT': 'Vermont',
+        'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia', 'WI': 'Wisconsin', 'WY': 'Wyoming'
+      };
+      
+      // Search for either full state names or abbreviations
+      const statePattern = new RegExp('\\b(' + 
+        Object.entries(states).map(([abbr, name]) => `${abbr}|${name}`).join('|') + 
+        ')\\b', 'i');
+      
+      const stateMatch = pageText.match(statePattern);
+      if (stateMatch && stateMatch[1]) {
+        location = stateMatch[1].trim();
+      }
+    }
     
     // Look for mileage
     const mileageMatch = pageText.match(/(\d{1,3}(,\d{3})*)\s*miles/i);
@@ -335,8 +382,8 @@ async function processCoachListing(hit: IndexHit) {
       status: 'available',
       isFeatured: false,
       isNewArrival: true,
-      seller: meta.seller || null,
-      location: meta.state || null,
+      seller,
+      location,
       sourceId,
       sourceUrl: url,
       typeId, // Add the coach type ID
