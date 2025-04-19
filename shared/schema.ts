@@ -36,8 +36,8 @@ export const coaches = pgTable("coaches", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
   year: integer("year").notNull(),
-  make: text("make").notNull(),
-  model: text("model").notNull(),
+  make: text("make").notNull(),      // Converter in this case
+  model: text("model").notNull(),    // Chassis/Model (H345)
   price: numeric("price", { precision: 12, scale: 2 }),
   description: text("description"),
   exteriorColor: text("exterior_color"),
@@ -50,6 +50,8 @@ export const coaches = pgTable("coaches", {
   status: text("status").default("available"),
   isFeatured: boolean("is_featured").default(false),
   isNewArrival: boolean("is_new_arrival").default(false),
+  seller: text("seller"),            // Added seller field
+  location: text("location"),        // State (FL)
   typeId: integer("type_id").references(() => coachTypes.id),
   sourceId: text("source_id").unique(), // ID from prevost-stuff.com
   sourceUrl: text("source_url"),

@@ -1,0 +1,172 @@
+I'm not even sure what its pulling right now but its not what I need. On https://www.prevost-stuff.com/forsale/public_list_ads.php I need the title minus " Prevost" so for the first listing "2009 Liberty Elegant Lady H3-45 Double Slide", and then in the details the seller "The Motorcoach Store" the converter "Liberty", the chassis (Model) "H345", Slides "2" State "FL" and price "$599,999" and then the photos as well. We can start with 5 photos but I want to be able to get at least the first 20 soon and scale from there
+
+
+ChatGPT said:
+
+Thought for 31 seconds
+Below is a focused patch that will make the scraper pull exactly the seven fields you listed—title (no “Prevost”) · seller · converter · chassis(model) · slides · state · price (keep “$” → number)—straight from the index page public_list_ads.php, then fetch up to 20 photos from the detail page.
+
+Copy / paste each snippet into Replit AI (or your editor) and commit.
+The code assumes the existing TypeScript stack and Drizzle models you already have.
+
+1 — Return rich metadata from the index page
+server/scraper.ts
+diff
+Copy
+Edit
+- async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
+-   const coachUrls: string[] = [];
++ interface IndexHit {
++   url: string;
++   meta: {
++     title:   string;
++     seller:  string | null;
++     converter:string | null;
++     model:   string | null;
++     slides:  number | null;
++     state:   string | null;
++     price:   number | null;
++   };
++ }
++ async function scrapeCoachListings(): Promise<IndexHit[]> {
++   const hits: IndexHit[] = [];
+    …
+-   $('a').each((_, element) => {
++   $('a[href$=".html"]').each((_, element) => {
+       const href  = $(element).attr('href');
+       if (!href) return;
+
+       const full  = href.startsWith('http') ? href
+                    : href.startsWith('/')   ? `${BASE_URL}${href}`
+                    : `${BASE_URL}/forsale/${href}`;
+
++      // grab the entire “row” text (anchor + following siblings)
++      const raw   = $(element).parent().text().replace(/\s+/g, ' ').trim();
+
++      // skip trailers / stackers
++      if (/hauler|stacker|trailer/i.test(raw)) return;
+
++      // ---------- regex pulls ----------
++      const cleanTitle = $(element).text()
++        .replace(/\bPrevost\b/gi,'').trim();
+
++      const seller    = raw.match(/Seller:\s*([^A-Z].*?)\s{2,}/i)?.[1]?.trim() ?? null;
++      const converter = raw.match(/Converter:\s*([^A-Z].*?)\s{2,}/i)?.[1]?.trim() ?? null;
++      const model     = raw.match(/Model:\s*([A-Z0-9\-]+)/i)?.[1] ?? null;
++      const slidesStr = raw.match(/Slides:\s*(\d)/i)?.[1];
++      const slides    = slidesStr ? Number(slidesStr) : null;
++      const state     = raw.match(/State:\s*([A-Z]{2})/i)?.[1] ?? null;
++      const priceStr  = raw.match(/Price:\s*\$([\d,]+)/i)?.[1];
++      const price     = priceStr ? Number(priceStr.replace(/,/g,'')) : null;
++
++      hits.push({
++        url: full,
++        meta: { title: cleanTitle, seller, converter, model, slides, state, price }
++      });
+    });
+-   return coachUrls;
++   return hits;
+ }
+2 — Process listings with pre‑parsed meta & up to 20 photos
+diff
+Copy
+Edit
+- const coachListings = await scrapeCoachListings();
++ const coachListings = await scrapeCoachListings();
+…
+- for (const listingUrl of coachListings) {
+-    await processCoachListing(listingUrl);
++ for (const hit of coachListings) {
++    await processCoachListing(hit);
+ }
+adjust signature
+diff
+Copy
+Edit
+- async function processCoachListing(url: string) {
++ async function processCoachListing(hit: IndexHit) {
++   const { url, meta } = hit;
+insert meta directly and keep slice(0,20)
+diff
+Copy
+Edit
+- // Extract title …
+- let title = '';
++ const title  = meta.title;
+…
+- // Extract price …
+- let price = 0; …
++ const price  = meta.price ?? 0;
+…
+- // Extract images - any img tag on the page
+- const imageUrls: string[] = [];
++ const imageUrls: string[] = [];
+  $('img').each((_, el) => { …});
+- // Keep everything
+- // Extract featured image …
++ const unique = Array.from(new Set(imageUrls)).slice(0,20);   // first 20
++ const featuredImage = unique[0] ?? '';
+finish coach data
+diff
+Copy
+Edit
+ const coachData: InsertCoach = {
+-  title,
++  title,
+   year: titleParts.year || new Date().getFullYear(),
+-  make: titleParts.make || 'Unknown',
+-  model: titleParts.model || 'Unknown',
++  make:  meta.converter ?? titleParts.make ?? 'Unknown',
++  model: meta.model     ?? titleParts.model ?? 'Unknown',
+   price,
+   slideCount: meta.slides ?? slideCount,
+-  location:  exteriorColor,
++  location:  meta.state ?? 'Unknown',
+   seller: meta.seller ?? null,
+   …
+ };
+(Add seller column if you haven’t yet.)
+
+3 — Unique sourceId & upsert
+diff
+Copy
+Edit
+await tx.insert(coaches).values(coachData)
+  .onConflictDoUpdate({
+     target: coaches.sourceId,
+     set: { price, updatedAt: sql`NOW()` }
+  })
+4 — Bump coach_images.position default & bulk‑insert
+ts
+Copy
+Edit
+await tx.delete(coachImages).where(eq(coachImages.coachId, coach.id));
+await tx.insert(coachImages).values(
+  unique.map((url,i)=>({ coachId: coach.id, imageUrl:url, position:i, isFeatured:i===0 }))
+);
+5 — Run & verify
+bash
+Copy
+Edit
+npm run scrape          # or POST /api/scrape
+
+psql $DATABASE_URL -c \
+"SELECT title, seller, converter, model, slides, location, price
+ FROM coaches ORDER BY created_at DESC LIMIT 5;"
+
+psql $DATABASE_URL -c \
+"SELECT coach_id, COUNT(*) photos FROM coach_images GROUP BY coach_id LIMIT 5;"
+You should see rows exactly like:
+
+less
+Copy
+Edit
+2009 Liberty Elegant Lady H3-45 Double Slide | The Motorcoach Store | Liberty | H3-45 | 2 | FL | 599999
+…and photos = 5 (or 20 when you remove .slice(0,5)).
+
+Next (optional) tweaks
+Concurrency: wrap processCoachListing calls with p-limit(8) for a 10× faster scrape.
+
+Alt text: set alt={coach.title + ' photo ' + (i+1)} in your <img> tags.
+
+Admin “missing price” badge: list WHERE price IS NULL to chase down “Price: $” items

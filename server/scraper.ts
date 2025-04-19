@@ -3,9 +3,24 @@ import * as cheerio from 'cheerio';
 import { storage } from './storage';
 import { InsertCoach, InsertCoachImage, InsertCoachFeature } from '@shared/schema';
 import { log } from './vite';
+import { sql } from 'drizzle-orm';
 
 // Base URL for scraping
 const BASE_URL = 'https://www.prevost-stuff.com';
+
+// Interface for rich metadata from the index page
+interface IndexHit {
+  url: string;
+  meta: {
+    title: string;
+    seller: string | null;
+    converter: string | null;
+    model: string | null;
+    slides: number | null;
+    state: string | null;
+    price: number | null;
+  };
+}
 
 /**
  * Main scraper controller that orchestrates the scraping process
@@ -17,11 +32,11 @@ export async function runScraper() {
     log(`Found ${coachListings.length} coach listings`, 'scraper');
     
     // Process each listing
-    for (const listingUrl of coachListings) {
+    for (const hit of coachListings) {
       try {
-        await processCoachListing(listingUrl);
+        await processCoachListing(hit);
       } catch (err) {
-        log(`Error processing listing ${listingUrl}: ${err}`, 'scraper');
+        log(`Error processing listing ${hit.url}: ${err}`, 'scraper');
       }
     }
     
@@ -32,56 +47,69 @@ export async function runScraper() {
 }
 
 /**
- * Scrapes the coach listings pages to get all coach URLs
+ * Scrapes the coach listings page to get all coach data
  */
-async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
-  const coachUrls: string[] = [];
-  const excludedKeywords = [
-    'dealer', 'property', 'real_estate', 'forum', 'calendar', 'contact', 
-    'about', 'links', 'list', 'index', 'home', 'news', 'login', 'register'
-  ];
+async function scrapeCoachListings(): Promise<IndexHit[]> {
+  const hits: IndexHit[] = [];
   
   try {
     // Use the new main listing page URL
     const { data } = await axios.get(`${BASE_URL}/forsale/public_list_ads.php`);
     const $ = cheerio.load(data);
     
-    // Find coach listing links - look for links in tables
-    $('a').each((_, element) => {
+    // Find coach listing links in the HTML table
+    $('a[href$=".html"]').each((_, element) => {
       const href = $(element).attr('href');
-      const text = $(element).text().trim().toLowerCase();
-      const hasImage = $(element).find('img').length > 0;
-      
       if (!href) return;
-      
-      // Skip URLs with excluded keywords
-      const lowerHref = href.toLowerCase();
-      if (excludedKeywords.some(keyword => lowerHref.includes(keyword.toLowerCase()))) {
-        return;
-      }
-      
-      // Look for ad detail links which typically have "detail" or "ad_detail" in them
-      if ((href.includes('detail') || 
-           href.includes('ad.php') || 
-           href.includes('view') || 
-           href.includes('coach')) && 
-          (hasImage || 
-           text.includes('coach') || 
-           text.includes('prevost') || 
-           text.includes('sale') || 
-           text.includes('marathon') ||
-           text.includes('featherlite') ||
-           text.includes('conversion'))) {
-        
-        const fullUrl = href.startsWith('http') ? href : 
+
+      const fullUrl = href.startsWith('http') ? href : 
                       href.startsWith('/') ? `${BASE_URL}${href}` : 
                       `${BASE_URL}/forsale/${href}`;
-        
-        if (!coachUrls.includes(fullUrl) && 
-            !fullUrl.includes('public_list_ads.php')) {
-          coachUrls.push(fullUrl);
+      
+      // grab the row text (anchor + following siblings)
+      const rawText = $(element).parent().text().replace(/\s+/g, ' ').trim();
+      
+      // skip trailers / stackers
+      if (/hauler|stacker|trailer/i.test(rawText)) return;
+      
+      // ---- Extract metadata from the listing row ----
+      
+      // Get title without "Prevost"
+      const cleanTitle = $(element).text()
+        .replace(/\bPrevost\b/gi, '').trim();
+      
+      // Extract seller
+      const seller = rawText.match(/Seller:\s*([^A-Z].*?)\s{2,}/i)?.[1]?.trim() ?? null;
+      
+      // Extract converter (Liberty, etc.)
+      const converter = rawText.match(/Converter:\s*([^A-Z].*?)\s{2,}/i)?.[1]?.trim() ?? null;
+      
+      // Extract model (H345)
+      const model = rawText.match(/Model:\s*([A-Z0-9\-]+)/i)?.[1] ?? null;
+      
+      // Extract number of slides
+      const slidesStr = rawText.match(/Slides:\s*(\d)/i)?.[1];
+      const slides = slidesStr ? Number(slidesStr) : null;
+      
+      // Extract state (FL)
+      const state = rawText.match(/State:\s*([A-Z]{2})/i)?.[1] ?? null;
+      
+      // Extract price without $ and commas
+      const priceStr = rawText.match(/Price:\s*\$([\d,]+)/i)?.[1];
+      const price = priceStr ? Number(priceStr.replace(/,/g, '')) : null;
+      
+      hits.push({
+        url: fullUrl,
+        meta: { 
+          title: cleanTitle, 
+          seller, 
+          converter, 
+          model, 
+          slides, 
+          state, 
+          price 
         }
-      }
+      });
     });
     
     // Wait to avoid overwhelming the source server
@@ -91,13 +119,15 @@ async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
     log(`Error scraping coach listings: ${error}`, 'scraper');
   }
   
-  return coachUrls;
+  return hits;
 }
 
 /**
  * Process an individual coach listing
  */
-async function processCoachListing(url: string) {
+async function processCoachListing(hit: IndexHit) {
+  const { url, meta } = hit;
+  
   try {
     log(`Processing coach listing: ${url}`, 'scraper');
     
@@ -111,28 +141,14 @@ async function processCoachListing(url: string) {
       return;
     }
     
-    // Fetch and parse the coach details page
+    // Fetch and parse the coach details page for more info and photos
     const { data } = await axios.get(url);
     const $ = cheerio.load(data);
     
-    // Extract title - use filename if no title found
-    let title = '';
-    $('h1, h2, h3, title, b').each((_, element) => {
-      const text = $(element).text().trim();
-      if (text && (text.includes('Prevost') || text.includes('Coach') || text.includes('20'))) {
-        if (!title || text.length > title.length) {
-          title = text;
-        }
-      }
-    });
+    // Use the title without "Prevost" from meta
+    const title = meta.title;
     
-    // If still no title, use filename
-    if (!title) {
-      const urlParts = url.split('/');
-      title = urlParts[urlParts.length - 1].replace('.htm', '').replace('.html', '').replace(/_/g, ' ');
-    }
-    
-    // Parse year, make, model from title or page content
+    // Parse year from title
     let titleParts = parseCoachTitle(title);
     
     // If no year found in title, look for it in the page
@@ -146,34 +162,25 @@ async function processCoachListing(url: string) {
       }
     }
     
-    // If no make found, default to Prevost
-    if (!titleParts.make) {
-      titleParts.make = 'Prevost';
-    }
+    // Use the converter from meta as the make, otherwise fallback to title parsing
+    const make = meta.converter || titleParts.make || 'Unknown';
     
-    // If no model found, try to determine from page content
-    if (!titleParts.model) {
-      const pageText = $('body').text().toLowerCase();
-      if (pageText.includes('h3-45')) {
-        titleParts.model = 'H3-45';
-      } else if (pageText.includes('x3-45')) {
-        titleParts.model = 'X3-45';
-      } else {
-        titleParts.model = 'Luxury Coach';
-      }
-    }
+    // Use the model from meta, otherwise fallback to title parsing
+    const model = meta.model || titleParts.model || 'Unknown';
     
-    // Extract price from any text that looks like a price
-    let price = 0;
-    const priceRegex = /\$[\d,]+|[\d,]+\s*dollars|price\s*:?\s*[\d,]+/i;
-    const priceMatch = $('body').text().match(priceRegex);
-    if (priceMatch) {
-      price = parsePrice(priceMatch[0]);
-    }
-    
-    // If no price found, set a default price
+    // Use the price from meta, or fallback to extracting from the page
+    let price = meta.price || 0;
     if (price === 0) {
-      price = 500000; // Default price for luxury coaches
+      const priceRegex = /\$[\d,]+|[\d,]+\s*dollars|price\s*:?\s*[\d,]+/i;
+      const priceMatch = $('body').text().match(priceRegex);
+      if (priceMatch) {
+        price = parsePrice(priceMatch[0]);
+      }
+      
+      // If still no price found, set a default price
+      if (price === 0) {
+        price = 500000; // Default price for luxury coaches
+      }
     }
     
     // Extract description - look for long paragraphs
@@ -186,7 +193,7 @@ async function processCoachListing(url: string) {
       }
     });
     
-    // Extract images - any img tag on the page
+    // Extract images - any img tag on the page, limit to 20 max
     const imageUrls: string[] = [];
     $('img').each((_, element) => {
       const imgSrc = $(element).attr('src') || $(element).attr('data-src');
@@ -202,13 +209,16 @@ async function processCoachListing(url: string) {
       }
     });
     
+    // Get unique images and limit to first 20
+    const uniqueImages = Array.from(new Set(imageUrls)).slice(0, 20);
+    
     // Extract featured image - first image or a larger one
     let featuredImage = '';
-    if (imageUrls.length > 0) {
-      featuredImage = imageUrls[0];
+    if (uniqueImages.length > 0) {
+      featuredImage = uniqueImages[0];
       
       // Look for an image with larger dimensions or "main" in filename
-      for (const imgUrl of imageUrls) {
+      for (const imgUrl of uniqueImages) {
         if (imgUrl.includes('main') || imgUrl.includes('large') || imgUrl.includes('hero')) {
           featuredImage = imgUrl;
           break;
@@ -228,13 +238,28 @@ async function processCoachListing(url: string) {
       }
     });
     
-    // Extract specifications from any table structures or lists
+    // Get the rest of the specifications from the page
     let mileage = 0;
     let length = '';
-    let slideCount = 0;
     let bedType = '';
     let exteriorColor = '';
     let interiorColor = '';
+    
+    // Use slide count from meta or extract from page
+    let slideCount = meta.slides || 0;
+    
+    // If no slide count in meta, try to extract from page
+    if (slideCount === 0) {
+      const pageText = $('body').text().toLowerCase();
+      const slideMatch = pageText.match(/(single|double|triple|quad|(\d+))\s*(slide|slideout)/i);
+      if (slideMatch) {
+        if (slideMatch[1] === 'single') slideCount = 1;
+        else if (slideMatch[1] === 'double') slideCount = 2;
+        else if (slideMatch[1] === 'triple') slideCount = 3;
+        else if (slideMatch[1] === 'quad') slideCount = 4;
+        else if (slideMatch[2]) slideCount = parseInt(slideMatch[2]);
+      }
+    }
     
     // Look for common specs in the page text
     const pageText = $('body').text().toLowerCase();
@@ -249,16 +274,6 @@ async function processCoachListing(url: string) {
     const lengthMatch = pageText.match(/(\d{2})\s*('|ft|feet)/i);
     if (lengthMatch) {
       length = `${lengthMatch[1]} feet`;
-    }
-    
-    // Look for slide outs
-    const slideMatch = pageText.match(/(single|double|triple|quad|(\d+))\s*(slide|slideout)/i);
-    if (slideMatch) {
-      if (slideMatch[1] === 'single') slideCount = 1;
-      else if (slideMatch[1] === 'double') slideCount = 2;
-      else if (slideMatch[1] === 'triple') slideCount = 3;
-      else if (slideMatch[1] === 'quad') slideCount = 4;
-      else if (slideMatch[2]) slideCount = parseInt(slideMatch[2]);
     }
     
     // Look for bed type
@@ -282,17 +297,17 @@ async function processCoachListing(url: string) {
     let typeId: number | undefined = undefined;
     
     const lowerTitle = title.toLowerCase();
-    const make = titleParts.make?.toLowerCase() || '';
+    const lowerMake = make.toLowerCase();
     
     // Class A is the default for large luxury coaches
     if (lowerTitle.includes('luxury') || 
         lowerTitle.includes('class a') ||
-        make === 'prevost' ||
-        make === 'marathon' ||
-        make === 'featherlite' ||
-        make === 'millennium' ||
-        make === 'liberty' ||
-        make === 'emerald') {
+        lowerMake === 'prevost' ||
+        lowerMake === 'marathon' ||
+        lowerMake === 'featherlite' ||
+        lowerMake === 'millennium' ||
+        lowerMake === 'liberty' ||
+        lowerMake === 'emerald') {
       typeId = 4; // Luxury type
     } else if (lowerTitle.includes('class a')) {
       typeId = 1; // Class A
@@ -306,9 +321,9 @@ async function processCoachListing(url: string) {
     const coachData: InsertCoach = {
       title,
       year: titleParts.year || new Date().getFullYear(),
-      make: titleParts.make || 'Unknown',
-      model: titleParts.model || 'Unknown',
-      price: price, // Now should be accepted as a number
+      make, // Converter
+      model, // Chassis/Model (H345)
+      price,
       description,
       exteriorColor,
       interiorColor,
@@ -320,6 +335,8 @@ async function processCoachListing(url: string) {
       status: 'available',
       isFeatured: false,
       isNewArrival: true,
+      seller: meta.seller || null,
+      location: meta.state || null,
       sourceId,
       sourceUrl: url,
       typeId, // Add the coach type ID
@@ -328,16 +345,22 @@ async function processCoachListing(url: string) {
     // Save coach to database
     const coach = await storage.createCoach(coachData);
     
-    // Save coach images
-    for (let i = 0; i < imageUrls.length; i++) {
+    // Delete existing images for the coach (if overwriting)
+    await storage.deleteCoachImages(coach.id);
+    
+    // Save coach images (up to 20 max)
+    for (let i = 0; i < uniqueImages.length && i < 20; i++) {
       const imageData: InsertCoachImage = {
         coachId: coach.id,
-        imageUrl: imageUrls[i],
+        imageUrl: uniqueImages[i],
         isFeatured: i === 0,
         position: i,
       };
       await storage.createCoachImage(imageData);
     }
+    
+    // Delete existing features for the coach (if overwriting)
+    await storage.deleteCoachFeatures(coach.id);
     
     // Save coach features
     for (const feature of features) {
