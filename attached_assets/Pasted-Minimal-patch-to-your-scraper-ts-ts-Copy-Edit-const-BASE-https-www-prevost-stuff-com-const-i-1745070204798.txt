@@ -1,0 +1,58 @@
+Minimal patch to your scraper.ts
+ts
+Copy
+Edit
+const BASE = "https://www.prevost-stuff.com";
+
+const indexHtml = await got(`${BASE}/forsale/public_list_ads.php`).text();
+const $ = load(indexHtml);
+
+const anchors = $("a[href$='.html']").toArray();
+
+for (const a of anchors) {
+  const href = $(a).attr("href")!;
+  if (!href.startsWith("/")) continue; // skip off‑site ads
+
+  const sourceId = path.parse(href).name.toLowerCase();
+  const fullUrl  = new URL(href, BASE).href;
+
+  // quick parse of list‑page blob
+  const blob = $(a).text().replace(/\s+/g, " ").trim();
+  if (/Hauler|Stacker|Trailer/i.test(blob)) continue;
+
+  const year      = Number(blob.match(/\b(19|20)\d{2}\b/)?.[0]);
+  const titleRaw  = blob.split(")").shift()!.trim();          // before "(pre-owned)"
+  const title     = titleRaw.replace(/\bPrevost\b/i, "").trim();
+
+  const seller    = blob.match(/Seller:\s*([^ ]+)/i)?.[1] ?? null;
+  const model     = blob.match(/Model:\s*([^ ]+)/i)?.[1] ?? null;
+  const state     = blob.match(/State:\s*([A-Z]{2})/i)?.[1] ?? null;
+  const slides    = Number(blob.match(/Slides:\s*(\d)/i)?.[1] ?? 0);
+  const priceStr  = blob.match(/Price:\s*\$([\d,]+)/)?.[1];
+  const price     = priceStr ? Number(priceStr.replace(/,/g, "")) : null;
+
+  // fetch detail page only for images
+  const detailHtml = await got(fullUrl).text();
+  const images = [...detailHtml.matchAll(/src="([^"]+forsale\/photos\/[^"]+\.jpe?g)"/gi)]
+                   .map(m => new URL(m[1], BASE).href)
+                   .filter(unique)
+                   .slice(0, 5);
+
+  await db.transaction(async tx => {
+    const [coach] = await tx.insert(coaches).values({
+      sourceId, title, year, price, seller,
+      model, location: state, slides, featuredImage: images[0],
+      typeId: LUXURY_TYPE_ID,
+    }).onConflictDoUpdate({
+      target: coaches.sourceId,
+      set: { price, updatedAt: sql`NOW()` },
+    }).returning();
+    if (images.length) {
+      await tx.delete(coachImages).where(eq(coachImages.coachId, coach.id));
+      await tx.insert(coachImages).values(
+        images.map((url, i) => ({ coachId: coach.id, imageUrl: url, position: i }))
+      );
+    }
+  });
+}
+Tip: wrap the per‑coach fetch in pLimit(8) to avoid hammering the site

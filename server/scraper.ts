@@ -278,6 +278,25 @@ async function processCoachListing(url: string) {
       interiorColor = interiorColorMatch[2].trim();
     }
     
+    // Assign a coach type based on the data
+    let typeId: number | undefined = undefined;
+    
+    // Class A is the default for large luxury coaches
+    if (title.toLowerCase().includes('luxury') || 
+        title.toLowerCase().includes('class a') ||
+        titleParts.make?.toLowerCase() === 'prevost' ||
+        titleParts.make?.toLowerCase() === 'marathon' ||
+        titleParts.make?.toLowerCase() === 'featherlite' ||
+        titleParts.make?.toLowerCase() === 'millennium') {
+      typeId = 4; // Luxury type
+    } else if (title.toLowerCase().includes('class a')) {
+      typeId = 1; // Class A
+    } else if (title.toLowerCase().includes('class b')) {
+      typeId = 2; // Class B
+    } else if (title.toLowerCase().includes('class c')) {
+      typeId = 3; // Class C
+    }
+    
     // Construct coach data
     const coachData: InsertCoach = {
       title,
@@ -298,6 +317,7 @@ async function processCoachListing(url: string) {
       isNewArrival: true,
       sourceId,
       sourceUrl: url,
+      typeId, // Add the coach type ID
     };
     
     // Save coach to database
