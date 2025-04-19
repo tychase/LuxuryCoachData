@@ -43,10 +43,16 @@ export const coaches = pgTable("coaches", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-export const insertCoachSchema = createInsertSchema(coaches).omit({
+// Create the insert schema but modify the price type to accept number
+let baseInsertSchema = createInsertSchema(coaches).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+});
+
+// Override the price field to accept numeric values
+export const insertCoachSchema = baseInsertSchema.extend({
+  price: z.number(),
 });
 
 export type InsertCoach = z.infer<typeof insertCoachSchema>;

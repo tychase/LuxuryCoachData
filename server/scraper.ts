@@ -36,6 +36,10 @@ export async function runScraper() {
  */
 async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
   const coachUrls: string[] = [];
+  const excludedKeywords = [
+    'dealer', 'property', 'real_estate', 'forum', 'calendar', 'contact', 
+    'about', 'links', 'list', 'index', 'home', 'news', 'login', 'register'
+  ];
   
   try {
     // Check the main used coaches page
@@ -48,47 +52,77 @@ async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
       const text = $(element).text().trim().toLowerCase();
       const hasImage = $(element).find('img').length > 0;
       
+      if (!href) return;
+      
+      // Skip URLs with excluded keywords
+      const lowerHref = href.toLowerCase();
+      if (excludedKeywords.some(keyword => lowerHref.includes(keyword.toLowerCase()))) {
+        return;
+      }
+      
       // Check if this is likely a coach listing
-      if (href && 
-          (href.includes('.htm') || href.includes('.html')) && 
-          (hasImage || text.includes('coach') || text.includes('prevost') || text.includes('sale')) &&
-          !href.includes('used_coaches.htm') && 
-          !href.includes('new_coach_sales.htm')) {
+      if ((href.includes('.htm') || href.includes('.html')) && 
+          (hasImage || 
+           text.includes('coach') || 
+           text.includes('prevost') || 
+           text.includes('sale') || 
+           text.includes('marathon') ||
+           text.includes('featherlite') ||
+           text.includes('conversion'))) {
         
         const fullUrl = href.startsWith('http') ? href : 
                       href.startsWith('/') ? `${BASE_URL}${href}` : 
                       `${BASE_URL}/coaches/${href}`;
         
-        if (!coachUrls.includes(fullUrl)) {
+        if (!coachUrls.includes(fullUrl) && 
+            !fullUrl.includes('used_coaches.htm') && 
+            !fullUrl.includes('new_coach_sales.htm')) {
           coachUrls.push(fullUrl);
         }
       }
     });
     
     // Also check the new coaches page
-    const newCoachesResponse = await axios.get(`${BASE_URL}/coaches/new_coach_sales.htm`);
-    const $new = cheerio.load(newCoachesResponse.data);
-    
-    $new('a').each((_, element) => {
-      const href = $new(element).attr('href');
-      const text = $new(element).text().trim().toLowerCase();
-      const hasImage = $new(element).find('img').length > 0;
+    try {
+      const newCoachesResponse = await axios.get(`${BASE_URL}/coaches/new_coach_sales.htm`);
+      const $new = cheerio.load(newCoachesResponse.data);
       
-      if (href && 
-          (href.includes('.htm') || href.includes('.html')) && 
-          (hasImage || text.includes('coach') || text.includes('prevost') || text.includes('sale')) &&
-          !href.includes('used_coaches.htm') && 
-          !href.includes('new_coach_sales.htm')) {
+      $new('a').each((_, element) => {
+        const href = $new(element).attr('href');
+        const text = $new(element).text().trim().toLowerCase();
+        const hasImage = $new(element).find('img').length > 0;
         
-        const fullUrl = href.startsWith('http') ? href : 
-                      href.startsWith('/') ? `${BASE_URL}${href}` : 
-                      `${BASE_URL}/coaches/${href}`;
+        if (!href) return;
         
-        if (!coachUrls.includes(fullUrl)) {
-          coachUrls.push(fullUrl);
+        // Skip URLs with excluded keywords
+        const lowerHref = href.toLowerCase();
+        if (excludedKeywords.some(keyword => lowerHref.includes(keyword.toLowerCase()))) {
+          return;
         }
-      }
-    });
+        
+        if ((href.includes('.htm') || href.includes('.html')) && 
+            (hasImage || 
+             text.includes('coach') || 
+             text.includes('prevost') || 
+             text.includes('sale') ||
+             text.includes('marathon') ||
+             text.includes('featherlite') ||
+             text.includes('conversion'))) {
+          
+          const fullUrl = href.startsWith('http') ? href : 
+                        href.startsWith('/') ? `${BASE_URL}${href}` : 
+                        `${BASE_URL}/coaches/${href}`;
+          
+          if (!coachUrls.includes(fullUrl) && 
+              !fullUrl.includes('used_coaches.htm') && 
+              !fullUrl.includes('new_coach_sales.htm')) {
+            coachUrls.push(fullUrl);
+          }
+        }
+      });
+    } catch (error) {
+      log(`Error scraping new coaches page: ${error}`, 'scraper');
+    }
     
     // Wait to avoid overwhelming the source server
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -170,16 +204,16 @@ async function processCoachListing(url: string) {
     }
     
     // Extract price from any text that looks like a price
-    let price = "0";
+    let price = 0;
     const priceRegex = /\$[\d,]+|[\d,]+\s*dollars|price\s*:?\s*[\d,]+/i;
     const priceMatch = $('body').text().match(priceRegex);
     if (priceMatch) {
-      price = parsePrice(priceMatch[0]).toString();
+      price = parsePrice(priceMatch[0]);
     }
     
     // If no price found, set a default price
-    if (price === "0") {
-      price = "500000"; // Default price for luxury coaches
+    if (price === 0) {
+      price = 500000; // Default price for luxury coaches
     }
     
     // Extract description - look for long paragraphs
@@ -290,7 +324,7 @@ async function processCoachListing(url: string) {
       year: titleParts.year || new Date().getFullYear(),
       make: titleParts.make || 'Unknown',
       model: titleParts.model || 'Unknown',
-      price: parseFloat(price),
+      price: price, // Now should be accepted as a number
       description,
       exteriorColor,
       interiorColor,
