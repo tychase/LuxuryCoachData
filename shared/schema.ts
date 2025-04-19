@@ -25,7 +25,7 @@ export const coaches = pgTable("coaches", {
   year: integer("year").notNull(),
   make: text("make").notNull(),
   model: text("model").notNull(),
-  price: numeric("price", { precision: 12, scale: 2 }).notNull(),
+  price: numeric("price", { precision: 12, scale: 2 }),
   description: text("description"),
   exteriorColor: text("exterior_color"),
   interiorColor: text("interior_color"),
@@ -64,7 +64,7 @@ export const coachImages = pgTable("coach_images", {
   coachId: integer("coach_id").notNull().references(() => coaches.id, { onDelete: "cascade" }),
   imageUrl: text("image_url").notNull(),
   isFeatured: boolean("is_featured").default(false),
-  sortOrder: integer("sort_order").default(0),
+  position: integer("position").default(0),
 });
 
 export const insertCoachImageSchema = createInsertSchema(coachImages).omit({

@@ -349,7 +349,7 @@ async function processCoachListing(url: string) {
         coachId: coach.id,
         imageUrl: imageUrls[i],
         isFeatured: i === 0,
-        sortOrder: i,
+        position: i,
       };
       await storage.createCoachImage(imageData);
     }
