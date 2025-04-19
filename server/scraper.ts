@@ -5,7 +5,7 @@ import { InsertCoach, InsertCoachImage, InsertCoachFeature } from '@shared/schem
 import { log } from './vite';
 
 // Base URL for scraping
-const BASE_URL = 'https://prevost-stuff.com';
+const BASE_URL = 'https://www.prevost-stuff.com';
 
 /**
  * Main scraper controller that orchestrates the scraping process
@@ -42,11 +42,11 @@ async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
   ];
   
   try {
-    // Check the main used coaches page
-    const { data } = await axios.get(`${BASE_URL}/coaches/used_coaches.htm`);
+    // Use the new main listing page URL
+    const { data } = await axios.get(`${BASE_URL}/forsale/public_list_ads.php`);
     const $ = cheerio.load(data);
     
-    // Find coach listing links - they're usually in tables with images
+    // Find coach listing links - look for links in tables
     $('a').each((_, element) => {
       const href = $(element).attr('href');
       const text = $(element).text().trim().toLowerCase();
@@ -60,8 +60,11 @@ async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
         return;
       }
       
-      // Check if this is likely a coach listing
-      if ((href.includes('.htm') || href.includes('.html')) && 
+      // Look for ad detail links which typically have "detail" or "ad_detail" in them
+      if ((href.includes('detail') || 
+           href.includes('ad.php') || 
+           href.includes('view') || 
+           href.includes('coach')) && 
           (hasImage || 
            text.includes('coach') || 
            text.includes('prevost') || 
@@ -72,57 +75,14 @@ async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
         
         const fullUrl = href.startsWith('http') ? href : 
                       href.startsWith('/') ? `${BASE_URL}${href}` : 
-                      `${BASE_URL}/coaches/${href}`;
+                      `${BASE_URL}/forsale/${href}`;
         
         if (!coachUrls.includes(fullUrl) && 
-            !fullUrl.includes('used_coaches.htm') && 
-            !fullUrl.includes('new_coach_sales.htm')) {
+            !fullUrl.includes('public_list_ads.php')) {
           coachUrls.push(fullUrl);
         }
       }
     });
-    
-    // Also check the new coaches page
-    try {
-      const newCoachesResponse = await axios.get(`${BASE_URL}/coaches/new_coach_sales.htm`);
-      const $new = cheerio.load(newCoachesResponse.data);
-      
-      $new('a').each((_, element) => {
-        const href = $new(element).attr('href');
-        const text = $new(element).text().trim().toLowerCase();
-        const hasImage = $new(element).find('img').length > 0;
-        
-        if (!href) return;
-        
-        // Skip URLs with excluded keywords
-        const lowerHref = href.toLowerCase();
-        if (excludedKeywords.some(keyword => lowerHref.includes(keyword.toLowerCase()))) {
-          return;
-        }
-        
-        if ((href.includes('.htm') || href.includes('.html')) && 
-            (hasImage || 
-             text.includes('coach') || 
-             text.includes('prevost') || 
-             text.includes('sale') ||
-             text.includes('marathon') ||
-             text.includes('featherlite') ||
-             text.includes('conversion'))) {
-          
-          const fullUrl = href.startsWith('http') ? href : 
-                        href.startsWith('/') ? `${BASE_URL}${href}` : 
-                        `${BASE_URL}/coaches/${href}`;
-          
-          if (!coachUrls.includes(fullUrl) && 
-              !fullUrl.includes('used_coaches.htm') && 
-              !fullUrl.includes('new_coach_sales.htm')) {
-            coachUrls.push(fullUrl);
-          }
-        }
-      });
-    } catch (error) {
-      log(`Error scraping new coaches page: ${error}`, 'scraper');
-    }
     
     // Wait to avoid overwhelming the source server
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -233,7 +193,7 @@ async function processCoachListing(url: string) {
       if (imgSrc) {
         const fullUrl = imgSrc.startsWith('http') ? imgSrc : 
                       imgSrc.startsWith('/') ? `${BASE_URL}${imgSrc}` : 
-                      `${BASE_URL}/coaches/${imgSrc}`;
+                      `${BASE_URL}/forsale/${imgSrc}`;
         
         // Only include actual image files
         if (fullUrl.match(/\.(jpg|jpeg|png|gif)$/i) && !imageUrls.includes(fullUrl)) {
