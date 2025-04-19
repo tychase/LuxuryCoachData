@@ -2,6 +2,7 @@ import {
   coaches, type Coach, type InsertCoach, 
   coachImages, type CoachImage, type InsertCoachImage,
   coachFeatures, type CoachFeature, type InsertCoachFeature,
+  coachTypes, type CoachType, type InsertCoachType,
   type CoachSearch, users, type User, type InsertUser
 } from "@shared/schema";
 import { db } from "./db";
@@ -30,6 +31,11 @@ export interface IStorage {
   getCoachFeatures(coachId: number): Promise<CoachFeature[]>;
   createCoachFeature(feature: InsertCoachFeature): Promise<CoachFeature>;
   deleteCoachFeature(id: number): Promise<boolean>;
+  
+  // Coach types operations
+  getCoachTypes(): Promise<CoachType[]>;
+  getCoachTypeById(id: number): Promise<CoachType | undefined>;
+  createCoachType(type: InsertCoachType): Promise<CoachType>;
   
   // Metadata operations
   getCoachMakes(): Promise<string[]>;
@@ -105,6 +111,12 @@ export class DatabaseStorage implements IStorage {
     if (search?.status) {
       conditions.push(
         eq(coaches.status, search.status)
+      );
+    }
+    
+    if (search?.typeId) {
+      conditions.push(
+        eq(coaches.typeId, search.typeId)
       );
     }
     
@@ -199,7 +211,7 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(coachImages)
       .where(eq(coachImages.coachId, coachId))
-      .orderBy(asc(coachImages.sortOrder));
+      .orderBy(asc(coachImages.position));
   }
 
   async createCoachImage(image: InsertCoachImage): Promise<CoachImage> {
@@ -273,6 +285,32 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(coaches.year));
     
     return result.map(row => row.year);
+  }
+  
+  // Coach types operations
+  async getCoachTypes(): Promise<CoachType[]> {
+    return db
+      .select()
+      .from(coachTypes)
+      .orderBy(asc(coachTypes.name));
+  }
+
+  async getCoachTypeById(id: number): Promise<CoachType | undefined> {
+    const [coachType] = await db
+      .select()
+      .from(coachTypes)
+      .where(eq(coachTypes.id, id));
+    
+    return coachType;
+  }
+
+  async createCoachType(type: InsertCoachType): Promise<CoachType> {
+    const [coachType] = await db
+      .insert(coachTypes)
+      .values(type)
+      .returning();
+    
+    return coachType;
   }
 }
 

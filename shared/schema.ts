@@ -64,9 +64,10 @@ let baseInsertSchema = createInsertSchema(coaches).omit({
   updatedAt: true,
 });
 
-// Override the price field to accept numeric values
+// Override the price field to accept numeric values and make typeId optional
 export const insertCoachSchema = baseInsertSchema.extend({
   price: z.number(),
+  typeId: z.number().int().optional(),
 });
 
 export type InsertCoach = z.infer<typeof insertCoachSchema>;
