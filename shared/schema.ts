@@ -18,6 +18,19 @@ export const insertUserSchema = createInsertSchema(users).pick({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
+// Coach types for categorization
+export const coachTypes = pgTable("coach_types", {
+  id: serial("id").primaryKey(),
+  name: text("name").unique().notNull(),   // e.g. "Class A"
+});
+
+export const insertCoachTypeSchema = createInsertSchema(coachTypes).omit({
+  id: true,
+});
+
+export type InsertCoachType = z.infer<typeof insertCoachTypeSchema>;
+export type CoachType = typeof coachTypes.$inferSelect;
+
 // Coach model for storing luxury coach data
 export const coaches = pgTable("coaches", {
   id: serial("id").primaryKey(),
@@ -37,6 +50,7 @@ export const coaches = pgTable("coaches", {
   status: text("status").default("available"),
   isFeatured: boolean("is_featured").default(false),
   isNewArrival: boolean("is_new_arrival").default(false),
+  typeId: integer("type_id").references(() => coachTypes.id),
   sourceId: text("source_id").unique(), // ID from prevost-stuff.com
   sourceUrl: text("source_url"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -89,9 +103,13 @@ export type InsertCoachFeature = z.infer<typeof insertCoachFeatureSchema>;
 export type CoachFeature = typeof coachFeatures.$inferSelect;
 
 // Setup relations
-export const coachesRelations = relations(coaches, ({ many }) => ({
+export const coachesRelations = relations(coaches, ({ many, one }) => ({
   images: many(coachImages),
   features: many(coachFeatures),
+  type: one(coachTypes, {
+    fields: [coaches.typeId],
+    references: [coachTypes.id],
+  }),
 }));
 
 export const coachImagesRelations = relations(coachImages, ({ one }) => ({
@@ -108,6 +126,10 @@ export const coachFeaturesRelations = relations(coachFeatures, ({ one }) => ({
   }),
 }));
 
+export const coachTypesRelations = relations(coachTypes, ({ many }) => ({
+  coaches: many(coaches),
+}));
+
 // Schema for searching coaches
 export const coachSearchSchema = z.object({
   search: z.string().optional(),
@@ -117,6 +139,7 @@ export const coachSearchSchema = z.object({
   minPrice: z.string().optional(),
   maxPrice: z.string().optional(),
   status: z.string().optional(),
+  typeId: z.number().int().optional(),
   page: z.number().optional().default(1),
   limit: z.number().optional().default(6),
   sortBy: z.string().optional().default("newest"),
