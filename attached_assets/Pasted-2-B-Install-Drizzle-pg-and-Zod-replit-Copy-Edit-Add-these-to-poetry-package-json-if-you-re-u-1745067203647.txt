@@ -1,0 +1,121 @@
+2‑B Install Drizzle, pg, and Zod
+replit
+Copy
+Edit
+Add these to poetry / package.json:
+
+# if you’re using Python → FastAPI:
+psycopg[binary]==3.1.*
+drizzle-orm==0.27.*
+python-dotenv==1.*
+
+# if Node/TS:
+npm i drizzle-orm pg zod dotenv
+(Adjust for your stack.)
+
+2‑C Create the Drizzle config file
+replit
+Copy
+Edit
+Generate a `drizzle.config.ts` at project root:
+
+import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  out: "./server/db/migrations",
+  schema: "./server/db/schema.ts",
+  breakpoints: true,
+  driver: "pg",
+  dbCredentials: { connectionString: process.env.DATABASE_URL! },
+});
+2‑D Write the schema definitions
+replit
+Copy
+Edit
+Scaffold `server/db/schema.ts` with Drizzle tables:
+
+import { pgTable, serial, text, integer, boolean, unique } from "drizzle-orm/pg-core";
+
+export const coachTypes = pgTable("coach_types", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+});
+
+export const coachListings = pgTable("coach_listings", {
+  id: serial("id").primaryKey(),
+  title: text("title").notNull(),
+  description: text("description"),
+  year: integer("year").notNull(),
+  price: integer("price"),
+  manufacturer: text("manufacturer").default("Prevost"),
+  typeId: integer("type_id").references(() => coachTypes.id),
+  location: text("location"),
+  converter: text("converter"),
+  model: text("model"),
+  slides: integer("slides"),
+  seller: text("seller"),
+  featuredImage: text("featured_image").notNull(),
+  createdAt: text("created_at").default("NOW()"),
+});
+
+export const coachImages = pgTable("coach_images", {
+  id: serial("id").primaryKey(),
+  coachId: integer("coach_id").references(() => coachListings.id, { onDelete: "cascade" }),
+  imageUrl: text("image_url").notNull(),
+  isPrimary: boolean("is_primary").default(false),
+  position: integer("position"),
+}, t => ({
+  uniqImage: unique().on(t.coachId, t.imageUrl)
+}));
+2‑E Generate and run the first migration
+replit
+Copy
+Edit
+Add an npm script (or poetry task) called "migrate":
+
+"migrate": "drizzle-kit generate && drizzle-kit up"
+
+Then run:
+npm run migrate      # or equivalent poetry task
+Ghostwriter will produce a SQL file in server/db/migrations and apply it, creating coach_types, coach_listings, and coach_images.
+
+2‑F Seed the lookup table
+replit
+Copy
+Edit
+Create `scripts/seed_coach_types.ts`:
+
+import { eq } from "drizzle-orm";
+import { db } from "../db/client";
+import { coachTypes } from "../db/schema";
+
+await db.insert(coachTypes).values({ name: "Class A" }).onConflictDoNothing();
+console.log("Coach types seeded");
+process.exit(0);
+Run:
+
+bash
+Copy
+Edit
+npx ts-node scripts/seed_coach_types.ts
+2‑G Confirm everything
+replit
+Copy
+Edit
+Run psql:
+
+psql $DATABASE_URL -c "\dt"          # expect the three coach_* tables
+psql $DATABASE_URL -c "SELECT * FROM coach_types;"
+You should see the Class A seed row.
+
+2‑H Update environment‑specific docs
+replit
+Copy
+Edit
+Append to README.md:
+
+## Database
+
+* **URL** in `.env`: `DATABASE_URL`
+* Migrations with `npm run migrate`
+* Seed coach types with `npx ts-node scripts/seed_coach_types.ts`
