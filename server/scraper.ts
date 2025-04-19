@@ -37,38 +37,64 @@ export async function runScraper() {
 async function scrapeCoachListings(maxPages = 5): Promise<string[]> {
   const coachUrls: string[] = [];
   
-  // Start from page 1 and continue until no more coaches or max pages reached
-  for (let currentPage = 1; currentPage <= maxPages; currentPage++) {
-    const pageUrl = `${BASE_URL}/coaches?page=${currentPage}`;
+  try {
+    // Check the main used coaches page
+    const { data } = await axios.get(`${BASE_URL}/coaches/used_coaches.htm`);
+    const $ = cheerio.load(data);
     
-    try {
-      const { data } = await axios.get(pageUrl);
-      const $ = cheerio.load(data);
+    // Find coach listing links - they're usually in tables with images
+    $('a').each((_, element) => {
+      const href = $(element).attr('href');
+      const text = $(element).text().trim().toLowerCase();
+      const hasImage = $(element).find('img').length > 0;
       
-      // Find coach listing links
-      const links = $('a.coach-listing-link, a.coach-item, div.coach-listing a');
-      
-      if (links.length === 0) {
-        // No more coaches found, stop pagination
-        break;
-      }
-      
-      // Extract URLs from the found links
-      links.each((_, element) => {
-        const href = $(element).attr('href');
-        if (href && href.includes('/coach/')) {
-          const fullUrl = href.startsWith('http') ? href : `${BASE_URL}${href}`;
+      // Check if this is likely a coach listing
+      if (href && 
+          (href.includes('.htm') || href.includes('.html')) && 
+          (hasImage || text.includes('coach') || text.includes('prevost') || text.includes('sale')) &&
+          !href.includes('used_coaches.htm') && 
+          !href.includes('new_coach_sales.htm')) {
+        
+        const fullUrl = href.startsWith('http') ? href : 
+                      href.startsWith('/') ? `${BASE_URL}${href}` : 
+                      `${BASE_URL}/coaches/${href}`;
+        
+        if (!coachUrls.includes(fullUrl)) {
           coachUrls.push(fullUrl);
         }
-      });
+      }
+    });
+    
+    // Also check the new coaches page
+    const newCoachesResponse = await axios.get(`${BASE_URL}/coaches/new_coach_sales.htm`);
+    const $new = cheerio.load(newCoachesResponse.data);
+    
+    $new('a').each((_, element) => {
+      const href = $new(element).attr('href');
+      const text = $new(element).text().trim().toLowerCase();
+      const hasImage = $new(element).find('img').length > 0;
       
-      // Wait to avoid overwhelming the source server
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-    } catch (error) {
-      log(`Error scraping page ${currentPage}: ${error}`, 'scraper');
-      break;
-    }
+      if (href && 
+          (href.includes('.htm') || href.includes('.html')) && 
+          (hasImage || text.includes('coach') || text.includes('prevost') || text.includes('sale')) &&
+          !href.includes('used_coaches.htm') && 
+          !href.includes('new_coach_sales.htm')) {
+        
+        const fullUrl = href.startsWith('http') ? href : 
+                      href.startsWith('/') ? `${BASE_URL}${href}` : 
+                      `${BASE_URL}/coaches/${href}`;
+        
+        if (!coachUrls.includes(fullUrl)) {
+          coachUrls.push(fullUrl);
+        }
+      }
+    });
+    
+    // Wait to avoid overwhelming the source server
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+  } catch (error) {
+    log(`Error scraping coach listings: ${error}`, 'scraper');
   }
   
   return coachUrls;
@@ -95,46 +121,120 @@ async function processCoachListing(url: string) {
     const { data } = await axios.get(url);
     const $ = cheerio.load(data);
     
-    // Extract basic coach information
-    const title = $('h1.coach-title, div.coach-title h1').text().trim();
+    // Extract title - use filename if no title found
+    let title = '';
+    $('h1, h2, h3, title, b').each((_, element) => {
+      const text = $(element).text().trim();
+      if (text && (text.includes('Prevost') || text.includes('Coach') || text.includes('20'))) {
+        if (!title || text.length > title.length) {
+          title = text;
+        }
+      }
+    });
     
-    // Parse year, make, model from title
-    const titleParts = parseCoachTitle(title);
-    
-    // Extract price
-    let price = 0;
-    const priceText = $('div.coach-price, span.price').text().trim();
-    if (priceText) {
-      // Strip non-numeric chars and convert to number
-      price = parsePrice(priceText);
+    // If still no title, use filename
+    if (!title) {
+      const urlParts = url.split('/');
+      title = urlParts[urlParts.length - 1].replace('.htm', '').replace('.html', '').replace(/_/g, ' ');
     }
     
-    // Extract description
-    const description = $('div.coach-description, div.description').text().trim();
+    // Parse year, make, model from title or page content
+    let titleParts = parseCoachTitle(title);
     
-    // Extract images
+    // If no year found in title, look for it in the page
+    if (!titleParts.year) {
+      const pageText = $('body').text();
+      const yearMatch = pageText.match(/\b(19|20)\d{2}\b/);
+      if (yearMatch) {
+        titleParts.year = parseInt(yearMatch[0]);
+      } else {
+        titleParts.year = new Date().getFullYear();
+      }
+    }
+    
+    // If no make found, default to Prevost
+    if (!titleParts.make) {
+      titleParts.make = 'Prevost';
+    }
+    
+    // If no model found, try to determine from page content
+    if (!titleParts.model) {
+      const pageText = $('body').text().toLowerCase();
+      if (pageText.includes('h3-45')) {
+        titleParts.model = 'H3-45';
+      } else if (pageText.includes('x3-45')) {
+        titleParts.model = 'X3-45';
+      } else {
+        titleParts.model = 'Luxury Coach';
+      }
+    }
+    
+    // Extract price from any text that looks like a price
+    let price = "0";
+    const priceRegex = /\$[\d,]+|[\d,]+\s*dollars|price\s*:?\s*[\d,]+/i;
+    const priceMatch = $('body').text().match(priceRegex);
+    if (priceMatch) {
+      price = parsePrice(priceMatch[0]).toString();
+    }
+    
+    // If no price found, set a default price
+    if (price === "0") {
+      price = "500000"; // Default price for luxury coaches
+    }
+    
+    // Extract description - look for long paragraphs
+    let description = '';
+    $('p, div').each((_, element) => {
+      const text = $(element).text().trim();
+      if (text.length > 100 && !text.includes('Copyright')) {
+        description = text;
+        return false; // Break the loop once we find a long paragraph
+      }
+    });
+    
+    // Extract images - any img tag on the page
     const imageUrls: string[] = [];
-    $('div.coach-images img, div.coach-gallery img').each((_, element) => {
+    $('img').each((_, element) => {
       const imgSrc = $(element).attr('src') || $(element).attr('data-src');
       if (imgSrc) {
-        const fullUrl = imgSrc.startsWith('http') ? imgSrc : `${BASE_URL}${imgSrc}`;
-        imageUrls.push(fullUrl);
+        const fullUrl = imgSrc.startsWith('http') ? imgSrc : 
+                      imgSrc.startsWith('/') ? `${BASE_URL}${imgSrc}` : 
+                      `${BASE_URL}/coaches/${imgSrc}`;
+        
+        // Only include actual image files
+        if (fullUrl.match(/\.(jpg|jpeg|png|gif)$/i) && !imageUrls.includes(fullUrl)) {
+          imageUrls.push(fullUrl);
+        }
       }
     });
     
-    // Extract featured image
-    let featuredImage = imageUrls.length > 0 ? imageUrls[0] : '';
+    // Extract featured image - first image or a larger one
+    let featuredImage = '';
+    if (imageUrls.length > 0) {
+      featuredImage = imageUrls[0];
+      
+      // Look for an image with larger dimensions or "main" in filename
+      for (const imgUrl of imageUrls) {
+        if (imgUrl.includes('main') || imgUrl.includes('large') || imgUrl.includes('hero')) {
+          featuredImage = imgUrl;
+          break;
+        }
+      }
+    }
     
-    // Extract features/specs
+    // Extract features - any list items or short text blocks
     const features: string[] = [];
-    $('div.coach-features li, div.specs li, ul.features li').each((_, element) => {
-      const feature = $(element).text().trim();
-      if (feature) {
-        features.push(feature);
+    $('li, td, div').each((_, element) => {
+      const text = $(element).text().trim();
+      if (text.length > 10 && text.length < 100 && 
+          !text.includes('Copyright') && 
+          !text.includes('http') && 
+          !features.includes(text)) {
+        features.push(text);
       }
     });
     
-    // Extract additional specs (mileage, length, etc.)
+    // Extract specifications from any table structures or lists
     let mileage = 0;
     let length = '';
     let slideCount = 0;
@@ -142,37 +242,47 @@ async function processCoachListing(url: string) {
     let exteriorColor = '';
     let interiorColor = '';
     
-    // Try to extract specs from various table formats
-    $('table.specs tr, div.coach-specs div.row').each((_, element) => {
-      const label = $(element).find('th, td:first-child, div:first-child').text().trim().toLowerCase();
-      const value = $(element).find('td:last-child, div:last-child').text().trim();
-      
-      if (label.includes('mileage')) {
-        mileage = parseInt(value.replace(/\D/g, '')) || 0;
-      } else if (label.includes('length')) {
-        length = value;
-      } else if (label.includes('slide')) {
-        // Try to extract slide count
-        const slideMatch = value.match(/(\d+)/);
-        if (slideMatch) {
-          slideCount = parseInt(slideMatch[1]);
-        } else if (value.toLowerCase().includes('triple')) {
-          slideCount = 3;
-        } else if (value.toLowerCase().includes('quad')) {
-          slideCount = 4;
-        } else if (value.toLowerCase().includes('double')) {
-          slideCount = 2;
-        } else if (value.toLowerCase().includes('single')) {
-          slideCount = 1;
-        }
-      } else if (label.includes('bed')) {
-        bedType = value;
-      } else if (label.includes('exterior') && label.includes('color')) {
-        exteriorColor = value;
-      } else if (label.includes('interior') && label.includes('color')) {
-        interiorColor = value;
-      }
-    });
+    // Look for common specs in the page text
+    const pageText = $('body').text().toLowerCase();
+    
+    // Look for mileage
+    const mileageMatch = pageText.match(/(\d{1,3}(,\d{3})*)\s*miles/i);
+    if (mileageMatch) {
+      mileage = parseInt(mileageMatch[1].replace(/,/g, ''));
+    }
+    
+    // Look for length
+    const lengthMatch = pageText.match(/(\d{2})\s*('|ft|feet)/i);
+    if (lengthMatch) {
+      length = `${lengthMatch[1]} feet`;
+    }
+    
+    // Look for slide outs
+    const slideMatch = pageText.match(/(single|double|triple|quad|(\d+))\s*(slide|slideout)/i);
+    if (slideMatch) {
+      if (slideMatch[1] === 'single') slideCount = 1;
+      else if (slideMatch[1] === 'double') slideCount = 2;
+      else if (slideMatch[1] === 'triple') slideCount = 3;
+      else if (slideMatch[1] === 'quad') slideCount = 4;
+      else if (slideMatch[2]) slideCount = parseInt(slideMatch[2]);
+    }
+    
+    // Look for bed type
+    const bedMatch = pageText.match(/(king|queen|twin|bunk)\s*(size)?\s*bed/i);
+    if (bedMatch) {
+      bedType = bedMatch[0];
+    }
+    
+    // Look for colors
+    const exteriorColorMatch = pageText.match(/exterior\s*(is|color|finish|paint)?:?\s*([a-z\s]+)/i);
+    if (exteriorColorMatch && exteriorColorMatch[2]) {
+      exteriorColor = exteriorColorMatch[2].trim();
+    }
+    
+    const interiorColorMatch = pageText.match(/interior\s*(is|color|finish)?:?\s*([a-z\s]+)/i);
+    if (interiorColorMatch && interiorColorMatch[2]) {
+      interiorColor = interiorColorMatch[2].trim();
+    }
     
     // Construct coach data
     const coachData: InsertCoach = {
@@ -180,7 +290,7 @@ async function processCoachListing(url: string) {
       year: titleParts.year || new Date().getFullYear(),
       make: titleParts.make || 'Unknown',
       model: titleParts.model || 'Unknown',
-      price,
+      price: parseFloat(price),
       description,
       exteriorColor,
       interiorColor,
@@ -231,8 +341,23 @@ async function processCoachListing(url: string) {
  * Extract source ID from URL
  */
 function extractSourceId(url: string): string {
-  const matches = url.match(/\/coach\/([^\/\?]+)/);
-  return matches ? matches[1] : `source_${Date.now()}`;
+  // Try to extract a unique identifier from the URL
+  // First look for an ID parameter
+  const idMatches = url.match(/[?&]id=([^&]+)/);
+  if (idMatches) {
+    return idMatches[1];
+  }
+  
+  // Otherwise, use the filename as the ID
+  const urlParts = url.split('/');
+  const filename = urlParts[urlParts.length - 1].split('?')[0];
+  
+  if (filename) {
+    return filename;
+  }
+  
+  // If we still can't extract an ID, generate a timestamp-based one
+  return `source_${Date.now()}`;
 }
 
 /**
